@@ -1,4 +1,11 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// Load .env from the monorepo root (two levels above apps/api/src)
+dotenv.config({ path: join(__dirname, "../../../.env") });
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
