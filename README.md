@@ -47,7 +47,9 @@ pnpm dev
 
 ---
 
-## 🏛️ Architecture Overview
+## 🏛️ Architecture Overview & Channel Extensibility
+
+The backend architecture is explicitly decoupled from the live chat widget. It utilizes a provider pattern (Strategy pattern) so that integrating future channels like WhatsApp or Instagram (similar to Spur’s core product) requires writing a single class without touching the LLM orchestration layer.
 
 ```
 spur-agent/
@@ -59,9 +61,14 @@ spur-agent/
 │   │   │   │   ├── client.ts     — SQLite singleton via better-sqlite3
 │   │   │   │   └── migrate.ts    — Migration runner script
 │   │   │   ├── lib/
+│   │   │   │   ├── channels/     — Channel Extensibility Providers
+│   │   │   │   │   ├── BaseChannel.ts      — Strategy interface for channels
+│   │   │   │   │   ├── LiveChatChannel.ts  — Browser SSE streaming channel
+│   │   │   │   │   └── WhatsAppChannel.ts  — Mock webhook asynchronous channel
+│   │   │   │   ├── orchestrator.ts — Central LLM & database transaction layer
 │   │   │   │   └── llm.ts        — generateReply() — Gemini + OpenAI
 │   │   │   ├── routes/
-│   │   │   │   └── chat.ts       — POST /chat/message, GET /chat/history/:id
+│   │   │   │   └── chat.ts       — Mounts live chat & WhatsApp webhook routes
 │   │   │   └── index.ts          — App entry, CORS, route mounting
 │   │   └── tests/
 │   │       ├── setup.ts          — Runs migrations before test suite
@@ -82,11 +89,13 @@ spur-agent/
 
 | Layer | File(s) | Responsibility |
 |-------|---------|----------------|
-| Route | `apps/api/src/routes/chat.ts` | Input validation, session management, DB reads/writes |
-| Service | `apps/api/src/lib/llm.ts` | LLM API calls, timeout enforcement, demo mode |
-| Data | `apps/api/src/db/schema.ts` | Schema definition; `client.ts` — SQLite client |
-| Proxy | `apps/web/app/api/chat/` | Forward browser requests to Hono API (keeps API_URL server-side) |
-| UI | `apps/web/app/chat/page.tsx` | Chat widget, state management, `localStorage` session persistence |
+| Route | `apps/api/src/routes/chat.ts` | Route definition; maps channel endpoints to specific Channel Providers. |
+| Channel | `apps/api/src/lib/channels/` | Implements channel-specific request parsing, formatting, and response delivery (e.g. HTTP SSE streaming, async webhooks). |
+| Orchestrator | `apps/api/src/lib/orchestrator.ts` | Core LLM reply orchestration, session management, database transaction boundary. |
+| Service | `apps/api/src/lib/llm.ts` | LLM API calls, timeout enforcement, fallback strategy. |
+| Data | `apps/api/src/db/schema.ts` | Schema definition; `client.ts` — SQLite client. |
+| Proxy | `apps/web/app/api/chat/` | Forward browser requests to Hono API (keeps API_URL server-side). |
+| UI | `apps/web/app/chat/page.tsx` | Chat widget, state management, `localStorage` session persistence. |
 
 ---
 

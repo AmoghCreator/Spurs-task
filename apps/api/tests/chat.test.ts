@@ -171,4 +171,46 @@ describe("Chat API Routes", () => {
     const data = (await res.json()) as { messages: unknown[] };
     expect(data.messages).toHaveLength(0);
   });
+
+  // ── WhatsApp Webhook ────────────────────────────────────────────────────────
+
+  it("POST /chat/whatsapp/webhook → 202 with status accepted", async () => {
+    const spy = vi.spyOn(console, "log");
+    const res = await app.request("/chat/whatsapp/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          {
+            from: "whatsapp:+14155552671",
+            text: { body: "Hello from WhatsApp!" },
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(202);
+    const data = (await res.json()) as { status: string };
+    expect(data.status).toBe("accepted");
+    spy.mockRestore();
+  });
+
+  it("POST /chat/whatsapp/webhook → 400 when payload is invalid/missing text", async () => {
+    const res = await app.request("/chat/whatsapp/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          {
+            from: "whatsapp:+14155552671",
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const data = (await res.json()) as { error: string };
+    expect(data.error).toBe("WhatsAppMessageCannotBeEmpty");
+  });
 });
+
