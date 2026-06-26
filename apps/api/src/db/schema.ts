@@ -3,6 +3,8 @@ import { sql } from "drizzle-orm";
 
 export const chatConversations = sqliteTable("chat_conversations", {
   id: text("id").primaryKey(),
+  channelOrigin: text("channel_origin").notNull().default("web"),
+  metadata: text("metadata"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

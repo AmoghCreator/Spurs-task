@@ -7,11 +7,14 @@ interface Message {
   id: string;
   sender: "user" | "ai";
   text: string;
+  streamingText?: string;
   timestamp?: Date | null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const SESSION_KEY = "chat_session_id";
+
+const SUGGESTIONS = ["Shipping to USA?", "Return policy?", "Support hours?"];
 
 // ── Component ────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -20,13 +23,19 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [inputFocused, setInputFocused] = useState(false);
+  const [emojiAnimation, setEmojiAnimation] = useState("wave 0.8s ease-in-out");
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  const [isEmergencyMode, setIsEmergencyMode] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to latest message
+  // Auto-scroll to latest message — scoped to the message container only
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messageAreaRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages, isLoading]);
 
   // On mount: restore session and fetch history
@@ -53,60 +62,135 @@ export default function ChatPage() {
   }, []);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-  async function handleSendMessage(e: FormEvent) {
-    e.preventDefault();
-    const text = inputValue.trim();
+
+  function handleFailure() {
+    setConsecutiveFailures((prev) => {
+      const next = prev + 1;
+      if (next >= 2) {
+        setIsEmergencyMode(true);
+      }
+      return next;
+    });
+  }
+
+  function handleSuccess() {
+    setConsecutiveFailures(0);
+  }
+
+  async function handleSendMessage(e?: FormEvent, textOverride?: string) {
+    if (e) e.preventDefault();
+    const text = (textOverride !== undefined ? textOverride : inputValue).trim();
     if (!text || isLoading) return;
 
     setInputValue("");
     setError(null);
     setIsLoading(true);
 
-    // Optimistic user bubble
     const userMsg: Message = {
       id: crypto.randomUUID(),
       sender: "user",
       text,
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const aiMsgId = crypto.randomUUID();
+    const initialAiMsg: Message = {
+      id: aiMsgId,
+      sender: "ai",
+      text: "",
+      streamingText: "",
+    };
+    
+    setMessages((prev) => [...prev, userMsg, initialAiMsg]);
+
+    const abortController = new AbortController();
+    let watchdogTimer: NodeJS.Timeout | undefined;
+    
+    const resetWatchdog = () => {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        abortController.abort(new Error("Connection timed out."));
+      }, 8000);
+    };
 
     try {
       const res = await fetch("/api/chat/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, sessionId }),
+        signal: abortController.signal,
       });
 
-      const data = (await res.json()) as {
-        reply?: string;
-        sessionId?: string;
-        error?: string;
-      };
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        let errData;
+        try { errData = await res.json(); } catch { /* ignore */ }
+        throw new Error(errData?.error ?? `HTTP ${res.status}`);
       }
 
-      // Persist session
-      if (data.sessionId) {
-        setSessionId(data.sessionId);
-        localStorage.setItem(SESSION_KEY, data.sessionId);
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let streamFinished = false;
+      let finalSessionId = sessionId;
+
+      while (!streamFinished) {
+        resetWatchdog();
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const lines = value.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const dataStr = line.slice(6);
+            if (dataStr === "[DONE]") {
+              streamFinished = true;
+              break;
+            }
+            try {
+              const data = JSON.parse(dataStr);
+              if (data.sessionId) finalSessionId = data.sessionId;
+              if (data.token) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === aiMsgId
+                      ? { ...m, streamingText: (m.streamingText || "") + data.token }
+                      : m
+                  )
+                );
+              }
+            } catch (err) {
+              // Ignore parse error
+            }
+          }
+        }
+      }
+      
+      clearTimeout(watchdogTimer);
+
+      if (finalSessionId && finalSessionId !== sessionId) {
+        setSessionId(finalSessionId);
+        localStorage.setItem(SESSION_KEY, finalSessionId);
       }
 
-      // AI reply bubble
-      const aiMsg: Message = {
-        id: crypto.randomUUID(),
-        sender: "ai",
-        text: data.reply!,
-      };
-      setMessages((prev) => [...prev, aiMsg]);
+      // Finalize message text
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiMsgId
+            ? { ...m, text: m.streamingText || "", streamingText: undefined }
+            : m
+        )
+      );
+
+      handleSuccess();
     } catch (err: unknown) {
+      clearTimeout(watchdogTimer);
       console.error("[chat] Send failed:", err);
       setError(
         err instanceof Error
           ? err.message
           : "Something went wrong. Please try again."
       );
+      // Remove the incomplete AI message on error
+      setMessages((prev) => prev.filter((m) => m.id !== aiMsgId));
+      handleFailure();
     } finally {
       setIsLoading(false);
       inputRef.current?.focus();
@@ -119,60 +203,329 @@ export default function ChatPage() {
     setMessages([]);
     setError(null);
     setInputValue("");
+    setEmojiAnimation("wave 0.8s ease-in-out");
+    setConsecutiveFailures(0);
+    setIsEmergencyMode(false);
     inputRef.current?.focus();
   }
 
+  const canSend = !isLoading && inputValue.trim().length > 0;
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={s.page}>
-      {/* Background blobs */}
-      <div style={s.blob1} />
-      <div style={s.blob2} />
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100vh",
+        background: "var(--bg-page)",
+        fontFamily: "var(--font-outfit)",
+        padding: "16px",
+        overflow: "hidden",
+        isolation: "isolate",
+      }}
+    >
+      {/* ── Ambient blobs ── */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: "-15%",
+          left: "-10%",
+          width: "45vw",
+          height: "45vw",
+          borderRadius: "50%",
+          background: "var(--bg-blob-1)",
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          bottom: "-15%",
+          right: "-10%",
+          width: "45vw",
+          height: "45vw",
+          borderRadius: "50%",
+          background: "var(--bg-blob-2)",
+          pointerEvents: "none",
+        }}
+      />
 
-      <div style={s.card}>
+      {/* ── Chat card ── */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          display: "flex",
+          flexDirection: "column",
+          width: "100%",
+          maxWidth: "640px",
+          height: "88vh",
+          maxHeight: "840px",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-card)",
+          borderRadius: "24px",
+          boxShadow: "var(--shadow-card)",
+          backdropFilter: "blur(24px)",
+          WebkitBackdropFilter: "blur(24px)",
+          overflow: "hidden",
+        }}
+      >
         {/* ── Header ── */}
-        <header style={s.header}>
-          <div style={s.headerLeft}>
-            <div style={s.avatarWrap}>
-              <span style={{ fontSize: "22px" }}>🤖</span>
-              <span style={s.activeDot} />
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 20px",
+            borderBottom: "1px solid var(--border-header)",
+            background: "var(--bg-header)",
+            backdropFilter: "blur(12px)",
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            {/* Avatar with online dot */}
+            <div
+              style={{
+                position: "relative",
+                width: "42px",
+                height: "42px",
+                borderRadius: "50%",
+                background: "var(--avatar-bg)",
+                border: "1px solid var(--avatar-border)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "20px",
+                flexShrink: 0,
+              }}
+            >
+              🤖
+              <span
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  bottom: "1px",
+                  right: "1px",
+                  width: "11px",
+                  height: "11px",
+                  borderRadius: "50%",
+                  background: "var(--dot-online)",
+                  border: `2px solid var(--dot-border)`,
+                  boxShadow: "0 0 8px rgba(16,185,129,0.7)",
+                  animation: "dotPulse 2.5s ease-in-out infinite",
+                }}
+              />
             </div>
+
             <div>
-              <p style={s.agentName}>Lobstral Support</p>
-              <p style={s.agentStatus}>Online · AI Agent</p>
+              <p
+                style={{
+                  fontSize: "15px",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                  margin: 0,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                Mr.Spurs Support
+              </p>
+              <p
+                style={{
+                  fontSize: "11px",
+                  color: "var(--dot-online)",
+                  margin: 0,
+                  marginTop: "1px",
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                }}
+              >
+                Online · AI Agent
+              </p>
             </div>
           </div>
-          <button style={s.newChatBtn} onClick={handleNewChat} type="button">
+
+          <button
+            id="new-chat-btn"
+            style={{
+              background: "var(--bg-new-btn)",
+              border: "1px solid var(--border-btn)",
+              borderRadius: "10px",
+              color: "var(--text-secondary)",
+              fontSize: "12px",
+              fontWeight: 600,
+              padding: "7px 16px",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              fontFamily: "inherit",
+              letterSpacing: "0.01em",
+            }}
+            onMouseOver={(e) => {
+              (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--border-chip)";
+            }}
+            onMouseOut={(e) => {
+              (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--border-btn)";
+            }}
+            onClick={handleNewChat}
+            type="button"
+          >
             New Chat
           </button>
         </header>
 
         {/* ── Error Banner ── */}
         {error && (
-          <div style={s.errorBanner}>
+          <div
+            role="alert"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "var(--error-bg)",
+              borderBottom: `1px solid var(--error-border)`,
+              color: "var(--error-text)",
+              padding: "9px 20px",
+              fontSize: "13px",
+              fontWeight: 500,
+              flexShrink: 0,
+            }}
+          >
             <span>⚠ {error}</span>
-            <button style={s.closeBtn} onClick={() => setError(null)} type="button">
+            <button
+              id="dismiss-error-btn"
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--error-text)",
+                fontSize: "18px",
+                cursor: "pointer",
+                lineHeight: 1,
+                padding: "0 2px",
+                opacity: 0.7,
+                transition: "opacity 0.2s",
+              }}
+              onClick={() => setError(null)}
+              type="button"
+              aria-label="Dismiss error"
+            >
               ×
             </button>
           </div>
         )}
 
-        {/* ── Messages ── */}
-        <div style={s.messageArea}>
+        {/* ── Message Area ── */}
+        {!isEmergencyMode ? (
+          <div
+            ref={messageAreaRef}
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "20px 18px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+          {/* Empty state */}
           {messages.length === 0 && !isLoading && (
-            <div style={s.emptyState}>
-              <p style={s.emptyTitle}>👋 Hi there!</p>
-              <p style={s.emptyText}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                flex: 1,
+                gap: "12px",
+                textAlign: "center",
+                paddingTop: "32px",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "40px",
+                  filter: "drop-shadow(0 0 16px rgba(37,99,235,0.35))",
+                  display: "inline-block",
+                  transformOrigin: "70% 80%",
+                  cursor: "default",
+                  animation: emojiAnimation,
+                }}
+                onMouseEnter={() => {
+                  setEmojiAnimation("wave 0.8s ease-in-out");
+                }}
+                onMouseLeave={() => {
+                  setEmojiAnimation("none");
+                }}
+                onAnimationEnd={() => {
+                  setEmojiAnimation("none");
+                }}
+              >
+                👋
+              </div>
+              <p
+                style={{
+                  fontSize: "18px",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                  letterSpacing: "-0.01em",
+                  margin: 0,
+                }}
+              >
+                Hi there!
+              </p>
+              <p
+                style={{
+                  fontSize: "14px",
+                  color: "var(--text-secondary)",
+                  maxWidth: "280px",
+                  lineHeight: 1.65,
+                  margin: 0,
+                }}
+              >
                 Ask me anything about shipping, returns, or support hours.
               </p>
-              <div style={s.suggestionRow}>
-                {["Shipping to USA?", "Return policy?", "Support hours?"].map((q) => (
+
+              {/* Suggestion chips */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                  justifyContent: "center",
+                  marginTop: "4px",
+                }}
+              >
+                {SUGGESTIONS.map((q) => (
                   <button
                     key={q}
-                    style={s.suggestionChip}
+                    style={{
+                      background: "var(--bg-chip)",
+                      border: "1px solid var(--border-chip)",
+                      borderRadius: "100px",
+                      color: "var(--text-chip)",
+                      fontSize: "13px",
+                      fontWeight: 500,
+                      padding: "7px 16px",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      transition: "all 0.2s",
+                    }}
+                    onMouseOver={(e) => {
+                      (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)";
+                      (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-glow-blue)";
+                    }}
+                    onMouseOut={(e) => {
+                      (e.currentTarget as HTMLElement).style.transform = "translateY(0)";
+                      (e.currentTarget as HTMLElement).style.boxShadow = "none";
+                    }}
                     onClick={() => {
-                      setInputValue(q);
-                      inputRef.current?.focus();
+                      handleSendMessage(undefined, q);
                     }}
                     type="button"
                   >
@@ -183,32 +536,75 @@ export default function ChatPage() {
             </div>
           )}
 
+          {/* Messages */}
           {messages.map((msg) => {
             const isUser = msg.sender === "user";
             return (
               <div
                 key={msg.id}
                 style={{
-                  ...s.messageRow,
-                  justifyContent: isUser ? "flex-end" : "flex-start",
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: "8px",
+                  maxWidth: "84%",
                   alignSelf: isUser ? "flex-end" : "flex-start",
+                  justifyContent: isUser ? "flex-end" : "flex-start",
+                  animation: "bubbleIn 0.25s ease-out both",
                 }}
               >
-                {!isUser && <span style={s.msgAvatar}>🤖</span>}
+                {/* AI Avatar */}
+                {!isUser && (
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      fontSize: "14px",
+                      flexShrink: 0,
+                      width: "28px",
+                      height: "28px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "var(--avatar-bg)",
+                      borderRadius: "50%",
+                      border: "1px solid var(--avatar-border)",
+                      marginBottom: "2px",
+                    }}
+                  >
+                    🤖
+                  </div>
+                )}
+
+                {/* Bubble */}
                 <div
                   style={{
-                    ...s.bubble,
-                    background: isUser
-                      ? "linear-gradient(135deg, #3b82f6, #2563eb)"
-                      : "rgba(30, 41, 59, 0.85)",
-                    borderBottomLeftRadius: isUser ? "14px" : "4px",
-                    borderBottomRightRadius: isUser ? "4px" : "14px",
+                    padding: "10px 15px",
+                    borderRadius: isUser ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                    maxWidth: "100%",
+                    wordBreak: "break-word",
+                    background: isUser ? "var(--bubble-user-bg)" : "var(--bg-bubble-ai)",
                     boxShadow: isUser
-                      ? "0 4px 16px rgba(59,130,246,0.3)"
-                      : "0 2px 8px rgba(0,0,0,0.3)",
+                      ? "var(--shadow-bubble-user)"
+                      : "var(--shadow-bubble-ai)",
+                    border: isUser ? "none" : "1px solid var(--border-card)",
                   }}
                 >
-                  <p style={s.bubbleText}>{msg.text}</p>
+                  {/*
+                    XSS Prevention Rationale:
+                    By rendering msg.text and msg.streamingText inside standard React text nodes rather than using
+                    dangerouslySetInnerHTML, React automatically escapes all HTML entities.
+                    This prevents any malicious scripts returned by the LLM (or injected via prompt) from executing.
+                  */}
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "14px",
+                      lineHeight: 1.6,
+                      color: isUser ? "#ffffff" : "var(--text-primary)",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {msg.streamingText !== undefined ? msg.streamingText : msg.text}
+                  </p>
                 </div>
               </div>
             );
@@ -216,14 +612,54 @@ export default function ChatPage() {
 
           {/* Typing indicator */}
           {isLoading && (
-            <div style={{ ...s.messageRow, justifyContent: "flex-start", alignSelf: "flex-start" }}>
-              <span style={s.msgAvatar}>🤖</span>
-              <div style={s.typingBubble}>
+            <div
+              aria-label="AI is typing"
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: "8px",
+                alignSelf: "flex-start",
+              }}
+            >
+              <div
+                aria-hidden="true"
+                style={{
+                  fontSize: "14px",
+                  width: "28px",
+                  height: "28px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "var(--avatar-bg)",
+                  borderRadius: "50%",
+                  border: "1px solid var(--avatar-border)",
+                  flexShrink: 0,
+                }}
+              >
+                🤖
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  background: "var(--bg-bubble-ai)",
+                  border: "1px solid var(--border-card)",
+                  padding: "12px 16px",
+                  borderRadius: "18px 18px 18px 4px",
+                  boxShadow: "var(--shadow-bubble-ai)",
+                }}
+              >
                 {[0, 0.2, 0.4].map((delay, i) => (
                   <span
                     key={i}
                     style={{
-                      ...s.typingDot,
+                      width: "7px",
+                      height: "7px",
+                      borderRadius: "50%",
+                      background: "var(--text-muted)",
+                      display: "inline-block",
+                      animation: `typingBounce 1.4s infinite ease-in-out both`,
                       animationDelay: `${delay}s`,
                     }}
                   />
@@ -233,313 +669,143 @@ export default function ChatPage() {
           )}
 
           <div ref={messagesEndRef} />
-        </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "32px 24px",
+              textAlign: "center",
+              gap: "16px",
+              background: "var(--bg-page)",
+            }}
+          >
+            <div style={{ fontSize: "48px" }}>🛠️</div>
+            <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "20px" }}>Chat is currently unavailable</h2>
+            <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "14px", lineHeight: 1.5 }}>
+              We're having trouble connecting to our live chat right now. 
+              <br /><br />
+              Please email us at <strong>support@mrspurs-store.com</strong> and we'll get back to you within 24 business hours. Our support hours are Monday to Friday, 9:00 AM – 5:00 PM EST.
+            </p>
+            <button
+              onClick={() => {
+                setIsEmergencyMode(false);
+                setConsecutiveFailures(0);
+                setError(null);
+              }}
+              style={{
+                marginTop: "16px",
+                padding: "10px 20px",
+                background: "var(--brand-blue)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                cursor: "pointer",
+                fontWeight: 600,
+                fontFamily: "inherit",
+              }}
+            >
+              Try Again
+            </button>
+          </div>
+        )}
 
-        {/* ── Input ── */}
-        <form style={s.inputRow} onSubmit={handleSendMessage}>
-          <input
-            ref={inputRef}
-            style={s.input}
+        {/* ── Input Area ── */}
+        {!isEmergencyMode && (
+        <form
+          onSubmit={(e) => handleSendMessage(e)}
+          style={{
+            display: "flex",
+            gap: "10px",
+            padding: "14px 18px",
+            borderTop: "1px solid var(--border-header)",
+            background: "var(--bg-header)",
+            flexShrink: 0,
+            alignItems: "flex-start",
+          }}
+        >
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
+            <input
+              ref={inputRef}
+              id="chat-input"
+              style={{
+                width: "100%",
+                background: "var(--bg-input)",
+              border: `1.5px solid ${inputFocused ? "var(--brand-blue)" : "var(--border-input)"}`,
+              borderRadius: "14px",
+              color: "var(--text-primary)",
+              padding: "12px 16px",
+              fontSize: "14px",
+              outline: "none",
+              fontFamily: "inherit",
+              transition: "border-color 0.2s, box-shadow 0.2s",
+              boxShadow: inputFocused ? "0 0 0 3px rgba(37,99,235,0.12)" : "none",
+            }}
             type="text"
             placeholder="Ask about shipping, returns, support hours…"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             disabled={isLoading}
-            maxLength={2100}
+            maxLength={2000}
             autoComplete="off"
             spellCheck={false}
           />
-          <button
+          <div
             style={{
-              ...s.sendBtn,
-              background:
-                isLoading || !inputValue.trim()
-                  ? "#334155"
-                  : "linear-gradient(135deg, #3b82f6, #6366f1)",
-              cursor: isLoading || !inputValue.trim() ? "not-allowed" : "pointer",
-              boxShadow:
-                !isLoading && inputValue.trim()
-                  ? "0 4px 14px rgba(99,102,241,0.4)"
-                  : "none",
+              fontSize: "11px",
+              color: inputValue.length > 1900 ? "var(--error-text)" : "var(--text-muted)",
+              textAlign: "right",
+              paddingRight: "8px",
+            }}
+          >
+            {inputValue.length} / 2000
+          </div>
+          </div>
+          <button
+            id="send-btn"
+            style={{
+              flexShrink: 0,
+              width: "46px",
+              height: "46px",
+              borderRadius: "14px",
+              border: "none",
+              color: "#fff",
+              fontSize: "18px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: canSend ? "pointer" : "not-allowed",
+              fontFamily: "inherit",
+              background: canSend
+                ? "var(--bubble-user-bg)"
+                : "var(--bg-new-btn)",
+              boxShadow: canSend ? "var(--shadow-glow-indigo)" : "none",
+              opacity: canSend ? 1 : 0.45,
+              transition: "all 0.2s",
+              transform: "scale(1)",
+            }}
+            onMouseOver={(e) => {
+              if (canSend)
+                (e.currentTarget as HTMLElement).style.transform = "scale(1.08)";
+            }}
+            onMouseOut={(e) => {
+              (e.currentTarget as HTMLElement).style.transform = "scale(1)";
             }}
             type="submit"
-            disabled={isLoading || !inputValue.trim()}
+            disabled={!canSend}
             aria-label="Send message"
           >
             ➔
           </button>
         </form>
+        )}
       </div>
     </div>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-const s: Record<string, React.CSSProperties> = {
-  page: {
-    position: "relative",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: "100vh",
-    background: "radial-gradient(ellipse at 20% 50%, #0d1729 0%, #080c14 60%)",
-    padding: "16px",
-    overflow: "hidden",
-    fontFamily: "var(--font-outfit, system-ui, sans-serif)",
-  },
-  blob1: {
-    position: "absolute",
-    top: "-15%",
-    left: "-10%",
-    width: "45vw",
-    height: "45vw",
-    borderRadius: "50%",
-    background:
-      "radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%)",
-    pointerEvents: "none",
-    zIndex: 0,
-  },
-  blob2: {
-    position: "absolute",
-    bottom: "-15%",
-    right: "-10%",
-    width: "45vw",
-    height: "45vw",
-    borderRadius: "50%",
-    background:
-      "radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%)",
-    pointerEvents: "none",
-    zIndex: 0,
-  },
-  card: {
-    position: "relative",
-    zIndex: 1,
-    display: "flex",
-    flexDirection: "column",
-    width: "100%",
-    maxWidth: "620px",
-    height: "82vh",
-    maxHeight: "820px",
-    background: "rgba(10, 16, 30, 0.72)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: "20px",
-    boxShadow:
-      "0 25px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06)",
-    backdropFilter: "blur(20px)",
-    overflow: "hidden",
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "16px 20px",
-    borderBottom: "1px solid rgba(255,255,255,0.06)",
-    background: "rgba(15,23,42,0.5)",
-    flexShrink: 0,
-  },
-  headerLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-  },
-  avatarWrap: {
-    position: "relative",
-    width: "42px",
-    height: "42px",
-    borderRadius: "50%",
-    background: "rgba(59,130,246,0.15)",
-    border: "1px solid rgba(59,130,246,0.3)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  activeDot: {
-    position: "absolute",
-    bottom: "1px",
-    right: "1px",
-    width: "11px",
-    height: "11px",
-    borderRadius: "50%",
-    background: "#10b981",
-    border: "2px solid #080c14",
-    boxShadow: "0 0 8px rgba(16,185,129,0.8)",
-  },
-  agentName: {
-    fontSize: "15px",
-    fontWeight: 600,
-    color: "#f1f5f9",
-    margin: 0,
-  },
-  agentStatus: {
-    fontSize: "11px",
-    color: "#64748b",
-    margin: 0,
-    marginTop: "1px",
-  },
-  newChatBtn: {
-    background: "none",
-    border: "1px solid rgba(255,255,255,0.1)",
-    borderRadius: "8px",
-    color: "#94a3b8",
-    fontSize: "12px",
-    fontWeight: 500,
-    padding: "6px 14px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    fontFamily: "inherit",
-  },
-  errorBanner: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    background: "rgba(239,68,68,0.12)",
-    borderBottom: "1px solid rgba(239,68,68,0.25)",
-    color: "#fca5a5",
-    padding: "8px 18px",
-    fontSize: "13px",
-    flexShrink: 0,
-  },
-  closeBtn: {
-    background: "none",
-    border: "none",
-    color: "#fca5a5",
-    fontSize: "18px",
-    cursor: "pointer",
-    lineHeight: 1,
-    padding: "0 2px",
-  },
-  messageArea: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "20px 18px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "14px",
-  },
-  emptyState: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    flex: 1,
-    gap: "10px",
-    textAlign: "center",
-    paddingTop: "40px",
-  },
-  emptyTitle: {
-    fontSize: "22px",
-    fontWeight: 600,
-    color: "#f1f5f9",
-    margin: 0,
-  },
-  emptyText: {
-    fontSize: "14px",
-    color: "#64748b",
-    maxWidth: "280px",
-    lineHeight: 1.6,
-    margin: 0,
-  },
-  suggestionRow: {
-    display: "flex",
-    gap: "8px",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    marginTop: "8px",
-  },
-  suggestionChip: {
-    background: "rgba(59,130,246,0.1)",
-    border: "1px solid rgba(59,130,246,0.25)",
-    borderRadius: "20px",
-    color: "#93c5fd",
-    fontSize: "12px",
-    fontWeight: 500,
-    padding: "6px 14px",
-    cursor: "pointer",
-    fontFamily: "inherit",
-    transition: "all 0.2s",
-  },
-  messageRow: {
-    display: "flex",
-    alignItems: "flex-end",
-    gap: "8px",
-    maxWidth: "84%",
-  },
-  msgAvatar: {
-    fontSize: "16px",
-    flexShrink: 0,
-    marginBottom: "2px",
-    width: "28px",
-    height: "28px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(255,255,255,0.04)",
-    borderRadius: "50%",
-    border: "1px solid rgba(255,255,255,0.08)",
-  },
-  bubble: {
-    padding: "10px 14px",
-    borderRadius: "14px",
-    maxWidth: "100%",
-    wordBreak: "break-word",
-    transition: "opacity 0.15s ease",
-  },
-  bubbleText: {
-    margin: 0,
-    fontSize: "14px",
-    lineHeight: "1.55",
-    color: "#f1f5f9",
-    whiteSpace: "pre-wrap",
-  },
-  typingBubble: {
-    display: "flex",
-    alignItems: "center",
-    gap: "5px",
-    background: "rgba(30,41,59,0.85)",
-    padding: "12px 16px",
-    borderRadius: "14px",
-    borderBottomLeftRadius: "4px",
-  },
-  typingDot: {
-    width: "7px",
-    height: "7px",
-    borderRadius: "50%",
-    background: "#94a3b8",
-    display: "inline-block",
-    animation: "typingBounce 1.4s infinite ease-in-out both",
-  },
-  inputRow: {
-    display: "flex",
-    gap: "10px",
-    padding: "14px 18px",
-    borderTop: "1px solid rgba(255,255,255,0.06)",
-    background: "rgba(10,16,30,0.5)",
-    flexShrink: 0,
-  },
-  input: {
-    flex: 1,
-    background: "rgba(15,23,42,0.8)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "12px",
-    color: "#f1f5f9",
-    padding: "12px 16px",
-    fontSize: "14px",
-    outline: "none",
-    fontFamily: "inherit",
-    transition: "border-color 0.2s",
-  },
-  sendBtn: {
-    flexShrink: 0,
-    width: "46px",
-    height: "46px",
-    borderRadius: "12px",
-    border: "none",
-    color: "#fff",
-    fontSize: "18px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    transition: "all 0.2s",
-    fontFamily: "inherit",
-  },
-};

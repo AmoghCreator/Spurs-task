@@ -6,8 +6,16 @@ vi.mock("../src/lib/llm.js", () => ({
   generateReply: vi
     .fn()
     .mockResolvedValue(
-      "Hello! I'm your Lobstral support agent. How can I help you today?"
+      "Hello! I'm your Mr.Spurs support agent. How can I help you today?"
     ),
+  generateReplyStream: vi.fn().mockImplementation(async function* () {
+    yield "Hello!";
+    yield " I'm";
+    yield " your";
+    yield " Mr.Spurs";
+    yield " support";
+    yield " agent.";
+  }),
 }));
 
 describe("Chat API Routes", () => {
@@ -70,10 +78,33 @@ describe("Chat API Routes", () => {
     });
 
     expect(res.status).toBe(200);
-    const data = (await res.json()) as { reply: string; sessionId: string };
-    expect(typeof data.reply).toBe("string");
-    expect(data.reply.length).toBeGreaterThan(0);
-    expect(data.sessionId).toBe(sessionId);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const text = await res.text();
+    const lines = text.split("\n").filter((line) => line.trim() !== "");
+
+    const tokens: string[] = [];
+    let receivedSessionId = "";
+    let receivedDone = false;
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const dataStr = line.slice(6);
+        if (dataStr === "[DONE]") {
+          receivedDone = true;
+        } else {
+          const payload = JSON.parse(dataStr);
+          expect(payload).toHaveProperty("token");
+          expect(payload).toHaveProperty("sessionId");
+          tokens.push(payload.token);
+          receivedSessionId = payload.sessionId;
+        }
+      }
+    }
+
+    expect(tokens.join("")).toBe("Hello! I'm your Mr.Spurs support agent.");
+    expect(receivedSessionId).toBe(sessionId);
+    expect(receivedDone).toBe(true);
   });
 
   it("POST /chat/message → generates a new sessionId when none provided", async () => {
@@ -84,9 +115,24 @@ describe("Chat API Routes", () => {
     });
 
     expect(res.status).toBe(200);
-    const data = (await res.json()) as { reply: string; sessionId: string };
-    expect(typeof data.sessionId).toBe("string");
-    expect(data.sessionId.length).toBeGreaterThan(0);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const text = await res.text();
+    const lines = text.split("\n").filter((line) => line.trim() !== "");
+
+    let receivedSessionId = "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const dataStr = line.slice(6);
+        if (dataStr !== "[DONE]") {
+          const payload = JSON.parse(dataStr);
+          receivedSessionId = payload.sessionId;
+        }
+      }
+    }
+
+    expect(typeof receivedSessionId).toBe("string");
+    expect(receivedSessionId.length).toBeGreaterThan(0);
   });
 
   // ── History ───────────────────────────────────────────────────────────────
@@ -101,6 +147,8 @@ describe("Chat API Routes", () => {
       body: JSON.stringify({ message: "Do you ship internationally?", sessionId }),
     });
     expect(postRes.status).toBe(200);
+    // Consuming the response stream forces the handler to finish and persist the AI message
+    await postRes.text();
 
     // Fetch history
     const histRes = await app.request(`/chat/history/${sessionId}`);

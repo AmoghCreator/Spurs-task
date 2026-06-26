@@ -11,8 +11,18 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify(body),
     });
 
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.status });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: res.status });
+    }
+
+    return new NextResponse(res.body, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+      },
+    });
   } catch (err) {
     console.error("[proxy/chat/message] Error:", err);
     return NextResponse.json(

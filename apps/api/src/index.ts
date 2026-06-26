@@ -30,6 +30,8 @@ app.route("/chat", chat);
 // ── Server ────────────────────────────────────────────────────────────────────
 const port = Number(process.env.API_PORT ?? 3002);
 
-serve({ fetch: app.fetch, port }, () => {
-  console.log(`✅ API server running at http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  serve({ fetch: app.fetch, port }, () => {
+    console.log(`✅ API server running at http://localhost:${port}`);
+  });
+}

@@ -1,8 +1,9 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { eq, asc } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { chatConversations, chatMessages } from "../db/schema.js";
-import { generateReply } from "../lib/llm.js";
+import { generateReplyStream } from "../lib/llm.js";
 
 export const chat = new Hono();
 
@@ -35,7 +36,17 @@ chat.post("/message", async (c) => {
       .onConflictDoNothing()
       .run();
 
-    // 2. Fetch last 10 messages for context
+    // 2. Persist user message
+    db.insert(chatMessages)
+      .values({
+        id: crypto.randomUUID(),
+        conversationId: sessionUUID,
+        sender: "user",
+        text: message.trim(),
+      })
+      .run();
+
+    // 3. Fetch last 10 messages for context
     const historyRows = db
       .select()
       .from(chatMessages)
@@ -49,44 +60,50 @@ chat.post("/message", async (c) => {
       text: r.text,
     }));
 
-    // 3. Call LLM — fallback to friendly message on error
-    let reply: string;
-    try {
-      reply = await generateReply(history, message.trim());
-    } catch (llmErr) {
-      console.error("[chat] LLM generation failed:", llmErr);
-      reply =
-        "I'm sorry, I'm having trouble thinking clearly right now. " +
-        "Please try sending your message again in a moment.";
-    }
+    // 4. Return SSE stream
+    return streamSSE(c, async (stream) => {
+      const controller = new AbortController();
+      stream.onAbort(() => {
+        controller.abort();
+      });
 
-    // 4. Persist user message
-    db.insert(chatMessages)
-      .values({
-        id: crypto.randomUUID(),
-        conversationId: sessionUUID,
-        sender: "user",
-        text: message.trim(),
-      })
-      .run();
+      let fullReply = "";
+      try {
+        const tokenStream = generateReplyStream(history, message.trim(), controller.signal);
+        for await (const token of tokenStream) {
+          fullReply += token;
+          await stream.writeSSE({
+            data: JSON.stringify({ token, sessionId: sessionUUID }),
+          });
+        }
+      } catch (err) {
+        console.error("[chat] Streaming failed:", err);
+      } finally {
+        await stream.writeSSE({ data: "[DONE]" });
 
-    // 5. Persist AI reply
-    db.insert(chatMessages)
-      .values({
-        id: crypto.randomUUID(),
-        conversationId: sessionUUID,
-        sender: "ai",
-        text: reply,
-      })
-      .run();
+        if (fullReply.trim()) {
+          try {
+            // 5. Persist AI reply
+            db.insert(chatMessages)
+              .values({
+                id: crypto.randomUUID(),
+                conversationId: sessionUUID,
+                sender: "ai",
+                text: fullReply,
+              })
+              .run();
 
-    // 6. Update conversation timestamp
-    db.update(chatConversations)
-      .set({ updatedAt: new Date() })
-      .where(eq(chatConversations.id, sessionUUID))
-      .run();
-
-    return c.json({ reply, sessionId: sessionUUID });
+            // 6. Update conversation timestamp
+            db.update(chatConversations)
+              .set({ updatedAt: new Date() })
+              .where(eq(chatConversations.id, sessionUUID))
+              .run();
+          } catch (dbErr) {
+            console.error("[chat] Failed to save AI reply:", dbErr);
+          }
+        }
+      }
+    });
   } catch (dbErr) {
     console.error("[chat] Database operation failed:", dbErr);
     return c.json({ error: "DatabaseError" }, 500);

@@ -7,7 +7,7 @@ const __dirname = dirname(__filename);
 
 export default defineConfig({
   schema: join(__dirname, "src/db/schema.ts"),
-  out: join(__dirname, "../../drizzle"),
+  out: "../../drizzle",
   dialect: "sqlite",
   dbCredentials: {
     url: join(__dirname, "../../chat.db"),

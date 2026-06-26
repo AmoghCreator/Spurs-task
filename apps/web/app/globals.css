@@ -1,38 +1,208 @@
+/* ── Reset ─────────────────────────────────────────────────── */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
+/* ── Design Tokens (T001) ──────────────────────────────────── */
+/* Light-mode defaults — Spur-inspired blue/slate palette */
 :root {
-  --font-outfit: 'Outfit', system-ui, sans-serif;
+  --font-outfit: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Brand */
+  --brand-blue:    #2563eb;
+  --brand-indigo:  #4f46e5;
+  --brand-violet:  #7c3aed;
+
+  /* Backgrounds */
+  --bg-page:       radial-gradient(ellipse at 20% 40%, #eef2ff 0%, #f8fafc 60%);
+  --bg-card:       rgba(255, 255, 255, 0.82);
+  --bg-header:     rgba(248, 250, 252, 0.75);
+  --bg-input:      rgba(255, 255, 255, 0.95);
+  --bg-bubble-ai:  rgba(241, 245, 249, 0.98);
+  --bg-chip:       rgba(37, 99, 235, 0.07);
+  --bg-blob-1:     radial-gradient(circle, rgba(59, 130, 246, 0.10) 0%, transparent 70%);
+  --bg-blob-2:     radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 70%);
+  --bg-new-btn:    rgba(15, 23, 42, 0.04);
+
+  /* Borders */
+  --border-card:   rgba(15, 23, 42, 0.07);
+  --border-header: rgba(15, 23, 42, 0.06);
+  --border-input:  rgba(15, 23, 42, 0.12);
+  --border-chip:   rgba(37, 99, 235, 0.18);
+  --border-btn:    rgba(15, 23, 42, 0.10);
+
+  /* Text */
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
+  --text-chip:      #1d4ed8;
+
+  /* Shadows */
+  --shadow-card:   0 20px 48px rgba(15, 23, 42, 0.09), 0 1px 0 rgba(255,255,255,0.6) inset;
+  --shadow-blob:   none;
+  --shadow-glow-blue:   0 4px 20px rgba(37, 99, 235, 0.30);
+  --shadow-glow-indigo: 0 4px 16px rgba(99, 102, 241, 0.35);
+  --shadow-bubble-ai:   0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-bubble-user: 0 4px 16px rgba(37, 99, 235, 0.28);
+
+  /* Dot color */
+  --dot-online: #10b981;
+  --dot-border: #f8fafc;
+
+  /* Misc */
+  --avatar-bg:   rgba(37, 99, 235, 0.10);
+  --avatar-border: rgba(37, 99, 235, 0.20);
+  --error-bg:    rgba(239, 68, 68, 0.08);
+  --error-border: rgba(239, 68, 68, 0.20);
+  --error-text:  #dc2626;
+  --scrollbar-thumb: rgba(15, 23, 42, 0.14);
+  --scrollbar-thumb-hover: rgba(15, 23, 42, 0.24);
+  --selection-bg: rgba(37, 99, 235, 0.18);
+
+  /* Bubble gradient - user */
+  --bubble-user-bg: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
 }
 
+/* Dark-mode overrides */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page:       radial-gradient(ellipse at 20% 50%, #0d1729 0%, #080c14 60%);
+    --bg-card:       rgba(10, 16, 30, 0.72);
+    --bg-header:     rgba(15, 23, 42, 0.55);
+    --bg-input:      rgba(15, 23, 42, 0.80);
+    --bg-bubble-ai:  rgba(30, 41, 59, 0.88);
+    --bg-chip:       rgba(59, 130, 246, 0.10);
+    --bg-blob-1:     radial-gradient(circle, rgba(59, 130, 246, 0.14) 0%, transparent 70%);
+    --bg-blob-2:     radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+    --bg-new-btn:    rgba(255, 255, 255, 0.04);
+
+    --border-card:   rgba(255, 255, 255, 0.07);
+    --border-header: rgba(255, 255, 255, 0.06);
+    --border-input:  rgba(255, 255, 255, 0.09);
+    --border-chip:   rgba(59, 130, 246, 0.25);
+    --border-btn:    rgba(255, 255, 255, 0.10);
+
+    --text-primary:   #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted:     #64748b;
+    --text-chip:      #93c5fd;
+
+    --shadow-card:   0 25px 50px rgba(0, 0, 0, 0.60), 0 1px 0 rgba(255,255,255,0.06) inset;
+    --shadow-glow-blue:   0 4px 24px rgba(59, 130, 246, 0.35);
+    --shadow-glow-indigo: 0 4px 20px rgba(99, 102, 241, 0.40);
+    --shadow-bubble-ai:   0 2px 10px rgba(0, 0, 0, 0.30);
+    --shadow-bubble-user: 0 4px 18px rgba(59, 130, 246, 0.32);
+
+    --dot-border: #080c14;
+
+    --avatar-bg:    rgba(59, 130, 246, 0.15);
+    --avatar-border: rgba(59, 130, 246, 0.30);
+    --error-bg:    rgba(239, 68, 68, 0.12);
+    --error-border: rgba(239, 68, 68, 0.25);
+    --error-text:  #fca5a5;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+    --selection-bg: rgba(59, 130, 246, 0.28);
+
+    --bubble-user-bg: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  }
+}
+
+/* Accessibility: reduce motion */
+@media (prefers-contrast: high) {
+  :root {
+    --border-card: rgba(0, 0, 0, 0.3);
+    --border-input: rgba(0, 0, 0, 0.4);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --border-card: rgba(255, 255, 255, 0.35);
+      --border-input: rgba(255, 255, 255, 0.45);
+    }
+  }
+}
+
+/* ── Base ──────────────────────────────────────────────────── */
 html, body {
   height: 100%;
+  overflow: hidden;
   font-family: var(--font-outfit);
-  background: #080c14;
-  color: #f8fafc;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
+/* ── Keyframes (T002) ──────────────────────────────────────── */
 
-/* Typing indicator animation */
+/* Typing indicator bounce */
 @keyframes typingBounce {
-  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-  40%           { transform: translateY(-6px); opacity: 1; }
+  0%, 80%, 100% { transform: translateY(0);    opacity: 0.35; }
+  40%           { transform: translateY(-6px); opacity: 1;    }
+}
+
+/* Blob ambient pulse */
+@keyframes blobPulse {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(1.08); opacity: 0.8; }
+}
+
+/* Message bubble entrance */
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)  scale(1);    }
+}
+
+/* Hero CTA glow pulse */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: var(--shadow-glow-blue); }
+  50%      { box-shadow: 0 8px 36px rgba(99, 102, 241, 0.50); }
+}
+
+/* Subtle float for hero emoji/icon */
+@keyframes floatY {
+  0%, 100% { transform: translateY(0);   }
+  50%      { transform: translateY(-8px); }
+}
+
+/* Wave hand on hover */
+@keyframes wave {
+  0%        { transform: rotate(  0deg); }
+  15%       { transform: rotate( 20deg); }
+  30%       { transform: rotate( -8deg); }
+  45%       { transform: rotate( 20deg); }
+  60%       { transform: rotate( -4deg); }
+  75%       { transform: rotate( 12deg); }
+  100%      { transform: rotate(  0deg); }
+}
+
+/* Online dot pulse */
+@keyframes dotPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  50%      { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);  }
+}
+
+/* ── Scrollbar (T005) ──────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+/* ── Text selection ────────────────────────────────────────── */
+::selection {
+  background: var(--selection-bg);
+  color: var(--text-primary);
+}
+
+/* ── Utility: reduce motion ────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
