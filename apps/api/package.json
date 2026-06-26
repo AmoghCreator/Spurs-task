@@ -16,7 +16,8 @@
     "better-sqlite3": "^11.7.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.44.1",
-    "hono": "^4.6.14"
+    "hono": "^4.6.14",
+    "ikai-cli": "latest"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

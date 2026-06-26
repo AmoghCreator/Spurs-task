@@ -1,3 +1,12 @@
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const execFileAsync = promisify(execFile);
+
 /**
  * LLM service — wraps Gemini and OpenAI behind a single generateReply() function.
  *
@@ -46,6 +55,24 @@ export interface MessageHistory {
   text: string;
 }
 
+async function fetchKBContext(query: string): Promise<string> {
+  try {
+    const kbDir = join(__dirname, "../../kb/mrspurs");
+    const { stdout } = await execFileAsync("npx", ["--no-install", "ikai-cli", "search", query, "--llm"], {
+      cwd: kbDir,
+    });
+    return stdout.trim();
+  } catch (err) {
+    console.error("[llm] KB search failed:", err);
+    return "";
+  }
+}
+
+function buildDynamicPrompt(kbContext: string): string {
+  if (!kbContext) return SYSTEM_PROMPT;
+  return SYSTEM_PROMPT + `\n\n=== RELEVANT KNOWLEDGE BASE CONTEXT ===\n${kbContext}\n=======================================\nUse the above context to answer the user if applicable.`;
+}
+
 /**
  * Generate an AI reply given conversation history and the latest user message.
  * Throws on unrecoverable errors (caller should catch and provide a fallback).
@@ -72,11 +99,14 @@ export async function generateReply(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);
 
+  const kbContext = await fetchKBContext(userMessage);
+  const systemPrompt = buildDynamicPrompt(kbContext);
+
   try {
     if (geminiKey) {
-      return await callGemini(geminiKey, recentHistory, userMessage, controller.signal);
+      return await callGemini(geminiKey, recentHistory, userMessage, systemPrompt, controller.signal);
     } else {
-      return await callOpenAI(openaiKey!, recentHistory, userMessage, controller.signal);
+      return await callOpenAI(openaiKey!, recentHistory, userMessage, systemPrompt, controller.signal);
     }
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
@@ -110,10 +140,13 @@ export async function* generateReplyStream(
 
   const recentHistory = history.slice(-10);
 
+  const kbContext = await fetchKBContext(userMessage);
+  const systemPrompt = buildDynamicPrompt(kbContext);
+
   if (geminiKey) {
-    yield* callGeminiStream(geminiKey, recentHistory, userMessage, signal);
+    yield* callGeminiStream(geminiKey, recentHistory, userMessage, systemPrompt, signal);
   } else {
-    yield* callOpenAIStream(openaiKey!, recentHistory, userMessage, signal);
+    yield* callOpenAIStream(openaiKey!, recentHistory, userMessage, systemPrompt, signal);
   }
 }
 
@@ -123,6 +156,7 @@ async function callGemini(
   apiKey: string,
   history: MessageHistory[],
   userMessage: string,
+  systemPrompt: string,
   signal: AbortSignal
 ): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -171,6 +205,7 @@ async function* callGeminiStream(
   apiKey: string,
   history: MessageHistory[],
   userMessage: string,
+  systemPrompt: string,
   signal: AbortSignal
 ): AsyncIterable<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
@@ -238,12 +273,13 @@ async function callOpenAI(
   apiKey: string,
   history: MessageHistory[],
   userMessage: string,
+  systemPrompt: string,
   signal: AbortSignal
 ): Promise<string> {
   const url = "https://api.openai.com/v1/chat/completions";
 
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     ...history.map((turn) => ({
       role: turn.sender === "user" ? "user" : "assistant",
       content: turn.sender === "user" ? `<user_message>${turn.text}</user_message>` : turn.text,
@@ -291,12 +327,13 @@ async function* callOpenAIStream(
   apiKey: string,
   history: MessageHistory[],
   userMessage: string,
+  systemPrompt: string,
   signal: AbortSignal
 ): AsyncIterable<string> {
   const url = "https://api.openai.com/v1/chat/completions";
 
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     ...history.map((turn) => ({
       role: turn.sender === "user" ? "user" : "assistant",
       content: turn.sender === "user" ? `<user_message>${turn.text}</user_message>` : turn.text,

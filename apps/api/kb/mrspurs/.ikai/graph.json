@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "namespace": "@ascii_heart/mrspurs",
+  "generated_at": "2026-06-26T08:11:33.417Z",
+  "nodes": [
+    {
+      "id": "42eb20d8-4a2f-4e4f-91e3-eff95ff31233",
+      "title": "Shipping Policy",
+      "type": "concept",
+      "file": "nodes/shipping-policy.md",
+      "body": "# Shipping Policy\n\nDomestic (USA): 5-7 business days. Flat rate $5.99, FREE on orders over $50.\nInternational: 7-14 business days. Flat rate $14.99.\nAll orders are processed and shipped within 1-2 business days.",
+      "content_hash": "sha256:fb2037c7399793a2c4f35072fe9d4e9b69a67a23b6a8b746d63834a3fe61b7c3",
+      "sources": [],
+      "authority": "ascii_heart",
+      "last_confirmed_at": "2026-06-26T08:11:13.010Z",
+      "created_at": "2026-06-26T08:11:13.010Z",
+      "updated_at": "2026-06-26T08:11:13.010Z"
+    },
+    {
+      "id": "4bfe7d55-d1b4-4762-b059-d0b531584f42",
+      "title": "Return & Refund Policy",
+      "type": "concept",
+      "file": "nodes/return-refund-policy.md",
+      "body": "# Return & Refund Policy\n\nCustomers have 30 days from delivery to return items.\nItems must be unused, in original packaging, with tags attached.\nReturn shipping is FREE for USA domestic orders; customer covers cost for international returns.\nRefunds are processed to the original payment method within 5-7 business days of receiving the return.",
+      "content_hash": "sha256:7d0a25277849d0358e832b62705039da901188c71876816d03fb77efd8d6c5b4",
+      "sources": [],
+      "authority": "ascii_heart",
+      "last_confirmed_at": "2026-06-26T08:11:23.220Z",
+      "created_at": "2026-06-26T08:11:23.220Z",
+      "updated_at": "2026-06-26T08:11:23.220Z"
+    },
+    {
+      "id": "3b0d5a22-927b-4e58-a7b4-a33bb48b45cf",
+      "title": "Support & Operating Hours",
+      "type": "concept",
+      "file": "nodes/support-operating-hours.md",
+      "body": "# Support & Operating Hours\n\nSupport hours: Monday to Friday, 9:00 AM - 5:00 PM EST.\nClosed on weekends and major US public holidays.\nContact email: support@mrspurs-store.com\nEmail response time: within 24 business hours.",
+      "content_hash": "sha256:a57a77f34aff944e8fd128d9c956d5ba1092f5a7f7df862f7327889ca60d984c",
+      "sources": [],
+      "authority": "ascii_heart",
+      "last_confirmed_at": "2026-06-26T08:11:33.411Z",
+      "created_at": "2026-06-26T08:11:33.411Z",
+      "updated_at": "2026-06-26T08:11:33.411Z"
+    }
+  ],
+  "edges": []
+}

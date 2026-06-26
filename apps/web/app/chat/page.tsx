@@ -12,7 +12,7 @@ interface Message {
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const SESSION_KEY = "chat_session_id";
+const HISTORY_KEY = "chat_sessions_history";
 
 const SUGGESTIONS = ["Shipping to USA?", "Return policy?", "Support hours?"];
 
@@ -38,13 +38,14 @@ export default function ChatPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, isLoading]);
 
-  // On mount: restore session and fetch history
+  // On mount: restore session ONLY if present in URL (allows refresh, but doesn't auto-open old sessions on fresh navigation)
   useEffect(() => {
-    const stored = localStorage.getItem(SESSION_KEY);
-    if (!stored) return;
-    setSessionId(stored);
+    const params = new URLSearchParams(window.location.search);
+    const urlSession = params.get("session");
+    if (!urlSession) return;
+    setSessionId(urlSession);
 
-    fetch(`/api/chat/history/${stored}`)
+    fetch(`/api/chat/history/${urlSession}`)
       .then((r) => r.json())
       .then((data: { messages?: Message[]; error?: string }) => {
         if (data.messages && data.messages.length > 0) {
@@ -167,7 +168,14 @@ export default function ChatPage() {
 
       if (finalSessionId && finalSessionId !== sessionId) {
         setSessionId(finalSessionId);
-        localStorage.setItem(SESSION_KEY, finalSessionId);
+        window.history.replaceState(null, "", `?session=${finalSessionId}`);
+        
+        // Save to history array for future "history tab" feature
+        const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        if (!history.includes(finalSessionId)) {
+          history.push(finalSessionId);
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        }
       }
 
       // Finalize message text
@@ -198,7 +206,7 @@ export default function ChatPage() {
   }
 
   function handleNewChat() {
-    localStorage.removeItem(SESSION_KEY);
+    window.history.replaceState(null, "", window.location.pathname);
     setSessionId(null);
     setMessages([]);
     setError(null);
@@ -539,6 +547,9 @@ export default function ChatPage() {
           {/* Messages */}
           {messages.map((msg) => {
             const isUser = msg.sender === "user";
+            const isEmpty = !isUser && !msg.text && !msg.streamingText;
+            if (isEmpty) return null;
+
             return (
               <div
                 key={msg.id}
@@ -611,7 +622,7 @@ export default function ChatPage() {
           })}
 
           {/* Typing indicator */}
-          {isLoading && (
+          {isLoading && messages.length > 0 && messages[messages.length - 1].sender === "ai" && !messages[messages.length - 1].text && !messages[messages.length - 1].streamingText && (
             <div
               aria-label="AI is typing"
               style={{
